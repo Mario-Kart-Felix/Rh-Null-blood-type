@@ -1,0 +1,315 @@
+RNA-Seq Coverage¶
+Requirements:
+
+Julia 0.5
+Bio.jl 0.4
+PlotlyJS.jl 0.4
+ProgressMeter 0.3
+In this tutorial we uses a public RNA-Seq data downloaded from the Sequence Read Archive (SRA): http://trace.ncbi.nlm.nih.gov/Traces/sra/?run=SRR1238088. Paired-end FASTQ sequence files were extracted from the archive file and aligned to the reference genome as follows:
+
+$ fastq-dump --gzip --skip-technical --readids --split-files SRR1238088.sra
+$ hisat2 -x ../TAIR/TAIR10 -1 SRR1238088_1.fastq.gz -2 SRR1238088_2.fastq.gz | samtools view -b - >SRR1238088.bam
+$ samtools sort -O bam -T tmp SRR1238088.bam >SRR1238088.sort.bam
+$ samtools index SRR1238088.sort.bam
+$ rm SRR1238088.bam
+The size of the sorted BAM file is about 1.9GB and its summary is shown below:
+
+In [1]:
+;ls -lh SRR1238088/
+total 13218272
+-rw-r--r--+ 1 kenta  staff   1.9G Sep  9 00:51 SRR1238088.sort.bam
+-rw-r--r--+ 1 kenta  staff   332K Sep  9 09:32 SRR1238088.sort.bam.bai
+-rw-r--r--@ 1 kenta  staff   1.8G Sep  8 23:00 SRR1238088.sra
+-rw-r--r--+ 1 kenta  staff   1.3G Sep  8 23:28 SRR1238088_1.fastq.gz
+-rw-r--r--+ 1 kenta  staff   1.3G Sep  8 23:28 SRR1238088_2.fastq.gz
+In [2]:
+;samtools flagstat SRR1238088/SRR1238088.sort.bam
+30498603 + 0 in total (QC-passed reads + QC-failed reads)
+857967 + 0 secondary
+0 + 0 supplementary
+0 + 0 duplicates
+28040186 + 0 mapped (91.94%:nan%)
+29640636 + 0 paired in sequencing
+14820318 + 0 read1
+14820318 + 0 read2
+25878214 + 0 properly paired (87.31%:nan%)
+26262350 + 0 with itself and mate mapped
+919869 + 0 singletons (3.10%:nan%)
+3476 + 0 with mate mapped to a different chr
+2896 + 0 with mate mapped to a different chr (mapQ>=5)
+Before processing we need to open the BAM file using the BAMReader type exported from the Bio.Align module. The index file can be specified by passing its file path to the index keyword argument:
+
+In [3]:
+using Bio.Align
+In [4]:
+bamfile = "SRR1238088/SRR1238088.sort.bam"
+reader = open(BAMReader, bamfile, index=bamfile * ".bai")
+Out[4]:
+Bio.Align.BAMReader{IOStream}:
+  header keys: SQ, PG, HD
+  number of contigs: 7
+Like an I/O object in Julia an object of BAMReader is a stateful iterator itself. You can iterate over BAM records stored in a file using the for loop and any iterator iterface will work as you expect. For example, first(reader) shows the first BAM record in a file:
+
+In [5]:
+first(reader)
+Out[5]:
+Bio.Align.BAMRecord:
+  sequence name: SRR1238088.5209417.1
+  reference name: Chr1
+  leftmost position: 3661
+  next reference name: Chr1
+  next leftmost position: 3677
+  mapping quality: 255
+  flag: 99
+  template length: 116
+  CIGAR string: 101M1S
+  sequence: CAAATACATAATCGGAGAAATACAGATTACAGAGAGCGAGAGAGATCGACGGCGAAGCTCTTTACCCGGAAACCATTGAAATCGGACGGTTTAGTGAAAATC
+  base qualities: Int8[34,34,34,37,37,37,37,37,39,39,39,39,39,41,41,41,41,41,41,41,41,41,41,41,41,40,41,41,41,41,41,41,40,41,35,40,36,39,39,40,40,41,41,41,40,40,40,41,41,41,38,39,39,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,33,35,35,35,32,35,34,34,35,35,35,35,34,35,35,35,33,33,35,35,24,30,33,29,34,25,31,31,35,35,35,25,34]
+  optional fields: Bio.Align.AuxDataDict(Pair{String,Any}("AS",-1),Pair{String,Any}("XN",0x00),Pair{String,Any}("XM",0x00),Pair{String,Any}("XO",0x00),Pair{String,Any}("XG",0x00),Pair{String,Any}("NM",0x00),Pair{String,Any}("MD","101"),Pair{String,Any}("YS",0x00),Pair{String,Any}("YT","CP"),Pair{String,Any}("NH",0x01))
+Extracting records overlapping a genomic region is quite fast and easy with a BAM index (BAI). The following is the range of a protein coding gene: https://www.arabidopsis.org/servlets/TairObject?id=36835&type=locus.
+
+In [6]:
+# AT3G11820
+chrom = "Chr3"
+leftpos = 3729305
+rightpos = 3731116
+Out[6]:
+3731116
+intersect(<bam reader>, <contig name>, <genomic range>) returns an iterator of BAM records that overlaps the specified genomic range. Let's check that the number of returned records matches that of samtools view:
+
+In [7]:
+count(_ -> true, intersect(reader, chrom, leftpos:rightpos))
+Out[7]:
+830
+In [8]:
+;samtools view SRR1238088/SRR1238088.sort.bam Chr3:3729305-3731116 | wc -l
+     830
+Okay, it works well. Then check the first fifteen records of it:
+
+In [9]:
+intsect = intersect(reader, chrom, leftpos:rightpos)
+for record in take(intsect, 15)
+    showcompact(record)
+    println()
+end
+SRR1238088.13346922.2	Chr3:3662721-3733539	88M70722N9M3S
+SRR1238088.12180187.2	Chr3:3705145-3767348	20M146N66M61961N11M3S
+SRR1238088.7829610.1	Chr3:3729207-3729307	1S101M
+SRR1238088.3490156.1	Chr3:3729309-3729409	101M1S
+SRR1238088.5572010.1	Chr3:3729333-3729433	101M1S
+SRR1238088.12490810.2	Chr3:3729333-3729431	1S99M
+SRR1238088.9535898.1	Chr3:3729334-3729434	101M1S
+SRR1238088.12050459.1	Chr3:3729341-3729442	102M
+SRR1238088.12050459.2	unmapped
+SRR1238088.5768605.2	Chr3:3729342-3729441	100M
+SRR1238088.12490810.1	Chr3:3729353-3729454	102M
+SRR1238088.3490156.2	Chr3:3729357-3729456	100M
+SRR1238088.5768605.1	Chr3:3729357-3729457	1S101M
+SRR1238088.9535898.2	Chr3:3729361-3729460	100M
+SRR1238088.554152.2	Chr3:3729374-3729473	100M
+The result of intersect is reusable unless the BAM reader is closed.
+
+In [10]:
+intsect
+Out[10]:
+Bio.Align.BAMIntersectionIterator{IOStream}(<Chr3:3729305-3731116>)
+In [11]:
+record = first(intsect)
+Out[11]:
+Bio.Align.BAMRecord:
+  sequence name: SRR1238088.13346922.2
+  reference name: Chr3
+  leftmost position: 3662721
+  next reference name: Chr3
+  next leftmost position: 3662713
+  mapping quality: 255
+  flag: 161
+  template length: 0
+  CIGAR string: 88M70722N9M3S
+  sequence: AGAAATCGAGAACGAGAAGCGAGCGAGAGTGATGGTTGAGAAAGTTTGTGATGAACTAGCAAGAGACATAAGCGAAGACAAAGCCGCAGTTAAAGAAATC
+  base qualities: Int8[31,31,35,35,35,36,37,39,30,35,37,37,38,39,31,38,36,39,40,39,38,36,39,38,36,39,39,31,37,14,30,37,32,37,37,23,34,39,35,37,31,28,28,31,28,34,31,35,34,32,30,32,36,37,38,37,35,36,37,37,36,34,36,35,36,36,34,34,35,34,35,35,35,33,30,33,35,35,34,34,35,34,34,24,17,24,24,20,27,17,29,34,34,34,31,34,31,35,34,25]
+  optional fields: Bio.Align.AuxDataDict(Pair{String,Any}("AS",-10),Pair{String,Any}("ZS",-14),Pair{String,Any}("XN",0x00),Pair{String,Any}("XM",0x01),Pair{String,Any}("XO",0x00),Pair{String,Any}("XG",0x00),Pair{String,Any}("NM",0x01),Pair{String,Any}("MD","86A10"),Pair{String,Any}("YT","UP"),Pair{String,Any}("XS",'+'),Pair{String,Any}("NH",0x03))
+An aligned position of a nucleotide can be computed using the seq2ref function. This function returns a pair of the aligned position and its operation. For example, the second nucleotide is aligned to a reference position at 3,662,722 with matching (M):
+
+In [12]:
+seq2ref(alignment(record), 2)
+Out[12]:
+(3662722,M)
+On the other hand the last nucleotide is aligned (or inserted) to 3,733,539 with soft clipping (S):
+
+In [13]:
+seq2ref(alignment(record), 100)
+Out[13]:
+(3733539,S)
+The following code calculates the coverage of mapped records within the range:
+
+In [14]:
+# count the number of mapped records
+n = 0
+
+# coverage counts
+cov = zeros(Int, rightpos - leftpos + 1)
+
+# iterate over overlapping BAM records
+for rec in intsect
+    # skip unmapped records
+    if !ismapped(rec)
+        continue
+    end
+    
+    # increment the counter
+    n += 1
+    
+    # extract alignment data from the BAM record
+    aln = alignment(rec)
+    
+    for i in 1:seqlength(rec)
+        # ses2ref maps a sequence position (i) to
+        # the corresponding reference position (j)
+        j, op = seq2ref(aln, i)
+        
+        # the alignment operation (op) must be a maching
+        # one to contribute the coverage and drop in
+        # the query range
+        if ismatchop(op) && leftpos ≤ j ≤ rightpos
+            cov[j - leftpos + 1] += 1
+        end
+    end
+end
+The number of mapped records is:
+
+In [15]:
+n
+Out[15]:
+804
+Visualizing the coverage count is very easy using PlotlyJS.jl package.
+
+In [16]:
+using PlotlyJS
+Plotly javascript loaded.
+
+To load again call
+
+init_notebook(true)
+WARNING: Method definition require(Symbol) in module Base at loading.jl:345 overwritten in module Main at /Users/kenta/.julia/v0.5/Requires/src/require.jl:12.
+In [17]:
+plot(scatter(x=leftpos:rightpos, y=cov), Layout(title="AT3G11820.1"))
+Out[17]:
+Making it as a function is a good idea to enhance reusability:
+
+In [18]:
+function coveragemap(reader, chrom, range)
+    n = 0
+    cov = zeros(Int, length(range))
+    for rec in intersect(reader, chrom, range)
+        if !ismapped(rec)
+            continue
+        end
+        n += 1
+        aln = alignment(rec)
+        for i in 1:seqlength(rec)
+            j, op = seq2ref(aln, i)
+            if ismatchop(op) && j in range
+                cov[j - first(range) + 1] += 1
+            end
+        end
+    end
+    return cov, n
+end
+Out[18]:
+coveragemap (generic function with 1 method)
+This function makes it possible to visualize multiple gene converages without setting their ranges by hand. Here we use a GFF3 annotation data file to retrieve mRNA ranges.
+
+In [19]:
+;cat TAIR/TAIR10_GFF3_genes.gff | head -5
+Chr1	TAIR10	chromosome	1	30427671	.	.	.	ID=Chr1;Name=Chr1
+Chr1	TAIR10	gene	3631	5899	.	+	.	ID=AT1G01010;Note=protein_coding_gene;Name=AT1G01010
+Chr1	TAIR10	mRNA	3631	5899	.	+	.	ID=AT1G01010.1;Parent=AT1G01010;Name=AT1G01010.1;Index=1
+Chr1	TAIR10	protein	3760	5630	.	+	.	ID=AT1G01010.1-Protein;Name=AT1G01010.1;Derives_from=AT1G01010.1
+Chr1	TAIR10	exon	3631	3913	.	+	.	Parent=AT1G01010.1
+Julia can quickly create a pipeline to extract interesting records from the GFF3 file using common UNIX commands:
+
+In [20]:
+pl = pipeline(
+    `cat TAIR/TAIR10_GFF3_genes.gff`,
+    `grep ^Chr2`,
+    `grep "\tmRNA\t"`,
+    `head -30`)
+for line in eachline(pl)
+    print(line)
+end
+Chr2	TAIR10	mRNA	1025	2810	.	+	.	ID=AT2G01008.1;Parent=AT2G01008;Name=AT2G01008.1;Index=1
+Chr2	TAIR10	mRNA	6571	6672	.	+	.	ID=AT2G01021.1;Parent=AT2G01021;Name=AT2G01021.1;Index=1
+Chr2	TAIR10	mRNA	9648	9767	.	-	.	ID=AT2G01023.1;Parent=AT2G01023;Name=AT2G01023.1;Index=1
+Chr2	TAIR10	mRNA	68337	69884	.	-	.	ID=AT2G01050.1;Parent=AT2G01050;Name=AT2G01050.1;Index=1
+Chr2	TAIR10	mRNA	73258	75389	.	-	.	ID=AT2G01060.1;Parent=AT2G01060;Name=AT2G01060.1;Index=1
+Chr2	TAIR10	mRNA	73258	75378	.	-	.	ID=AT2G01060.2;Parent=AT2G01060;Name=AT2G01060.2;Index=1
+Chr2	TAIR10	mRNA	75520	77865	.	+	.	ID=AT2G01070.1;Parent=AT2G01070;Name=AT2G01070.1;Index=1
+Chr2	TAIR10	mRNA	75520	77865	.	+	.	ID=AT2G01070.2;Parent=AT2G01070;Name=AT2G01070.2;Index=1
+Chr2	TAIR10	mRNA	77888	79334	.	+	.	ID=AT2G01080.1;Parent=AT2G01080;Name=AT2G01080.1;Index=1
+Chr2	TAIR10	mRNA	79989	81200	.	+	.	ID=AT2G01090.1;Parent=AT2G01090;Name=AT2G01090.1;Index=1
+Chr2	TAIR10	mRNA	79989	81710	.	+	.	ID=AT2G01090.2;Parent=AT2G01090;Name=AT2G01090.2;Index=1
+Chr2	TAIR10	mRNA	81437	83290	.	+	.	ID=AT2G01100.1;Parent=AT2G01100;Name=AT2G01100.1;Index=1
+Chr2	TAIR10	mRNA	81436	83217	.	+	.	ID=AT2G01100.2;Parent=AT2G01100;Name=AT2G01100.2;Index=1
+Chr2	TAIR10	mRNA	81440	83217	.	+	.	ID=AT2G01100.3;Parent=AT2G01100;Name=AT2G01100.3;Index=1
+Chr2	TAIR10	mRNA	83260	85229	.	-	.	ID=AT2G01110.1;Parent=AT2G01110;Name=AT2G01110.1;Index=1
+Chr2	TAIR10	mRNA	85401	88186	.	+	.	ID=AT2G01120.1;Parent=AT2G01120;Name=AT2G01120.1;Index=1
+Chr2	TAIR10	mRNA	85416	88181	.	+	.	ID=AT2G01120.2;Parent=AT2G01120;Name=AT2G01120.2;Index=1
+Chr2	TAIR10	mRNA	88559	94660	.	-	.	ID=AT2G01130.1;Parent=AT2G01130;Name=AT2G01130.1;Index=1
+Chr2	TAIR10	mRNA	94811	96655	.	-	.	ID=AT2G01140.1;Parent=AT2G01140;Name=AT2G01140.1;Index=1
+Chr2	TAIR10	mRNA	100649	101495	.	+	.	ID=AT2G01150.1;Parent=AT2G01150;Name=AT2G01150.1;Index=1
+Chr2	TAIR10	mRNA	102194	104549	.	-	.	ID=AT2G01170.1;Parent=AT2G01170;Name=AT2G01170.1;Index=1
+Chr2	TAIR10	mRNA	102211	104515	.	-	.	ID=AT2G01170.2;Parent=AT2G01170;Name=AT2G01170.2;Index=1
+Chr2	TAIR10	mRNA	104884	106216	.	-	.	ID=AT2G01175.1;Parent=AT2G01175;Name=AT2G01175.1;Index=1
+Chr2	TAIR10	mRNA	106900	108803	.	-	.	ID=AT2G01180.1;Parent=AT2G01180;Name=AT2G01180.1;Index=1
+Chr2	TAIR10	mRNA	106901	108611	.	-	.	ID=AT2G01180.2;Parent=AT2G01180;Name=AT2G01180.2;Index=1
+Chr2	TAIR10	mRNA	114975	117640	.	+	.	ID=AT2G01190.1;Parent=AT2G01190;Name=AT2G01190.1;Index=1
+Chr2	TAIR10	mRNA	118017	119332	.	+	.	ID=AT2G01200.1;Parent=AT2G01200;Name=AT2G01200.1;Index=1
+Chr2	TAIR10	mRNA	118018	119342	.	+	.	ID=AT2G01200.2;Parent=AT2G01200;Name=AT2G01200.2;Index=1
+Chr2	TAIR10	mRNA	119441	121846	.	-	.	ID=AT2G01210.1;Parent=AT2G01210;Name=AT2G01210.1;Index=1
+Chr2	TAIR10	mRNA	123276	126407	.	+	.	ID=AT2G01220.1;Parent=AT2G01220;Name=AT2G01220.1;Index=1
+Visualize the coverage of genes shown above:
+
+In [21]:
+ps = []
+for line in eachline(pl)
+    chrom, _, _, leftpos, rightpos, _, _, _, fields = split(line, '\t')
+    range = parse(Int, leftpos):parse(Int, rightpos)
+    cov, n = coveragemap(reader, chrom, range)
+    push!(ps, plot(scatter(x=range, y=cov), Layout(title=split(fields, ';')[1])))
+end
+p = [ps...]
+p.plot.layout["height"] = 80 * length(ps)
+p.plot.layout["showlegend"] = false
+p
+Out[21]:
+If you'd like to apply coveragemap all over a chromosome or a genome the performance is important. The BAM reader and algorithms, which are written in pure Julia, are carefully tuned and the process will finish within a reasonable time. Let's apply coveragemap to all mRNA regions in chromosome 2:
+
+In [22]:
+pl = pipeline(
+    `cat TAIR/TAIR10_GFF3_genes.gff`,
+    `grep ^Chr2`,
+    `grep "\tmRNA\t"`)
+Out[22]:
+pipeline(pipeline(`cat TAIR/TAIR10_GFF3_genes.gff`, stdout=`grep ^Chr2`), stdout=`grep '\tmRNA\t'`)
+In [23]:
+chr2_mrna = readlines(pl);
+The number of all mRNAs in chromosome 2 is:
+
+In [24]:
+length(chr2_mrna)
+Out[24]:
+5560
+In the next snippet we just compute the coverage without plotting.
+
+In [25]:
+# ProgressMeter.jl is useful for long-running analysis.
+using ProgressMeter
+In [26]:
+@showprogress for line in chr2_mrna
+    chrom, _, _, leftpos, rightpos, _, _, _, fields = split(line, '\t')
+    range = parse(Int, leftpos):parse(Int, rightpos)
+    coveragemap(reader, chrom, range)
+    # no plotting
+end
+Progress: 100%|█████████████████████████████████████████| Time: 0:01:28
